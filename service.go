@@ -41,6 +41,7 @@ func (service *FXService) Init(openExchangeAppID string) {
 
 // Start the HTTP Service
 func (service *FXService) Run(port string) {
+	log.Println("Starting service")
 	log.Fatal(http.ListenAndServe(port, service.Router))
 }
 
