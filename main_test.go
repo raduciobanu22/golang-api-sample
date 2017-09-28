@@ -14,7 +14,7 @@ var service FXService
 
 func TestMain(m *testing.M) {
 	service = FXService{}
-	service.Init("0f3040b808284cdda36fc571698335c5")
+	service.Init("")
 	os.Exit(m.Run())
 }
 
