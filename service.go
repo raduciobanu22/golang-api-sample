@@ -90,7 +90,7 @@ func (service *FXService) FetchRates(currency string) (map[string]float32, error
 		log.Println("Caching new rates")
 		service.CacheService.Set("rates", rates, cache.DefaultExpiration)
 	} else {
-		log.Println("Retrieving rates from cache")
+		log.Println("Retrieved rates from cache")
 	}
 
 	//Handle currency filter
