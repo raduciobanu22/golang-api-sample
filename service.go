@@ -3,16 +3,18 @@ package main
 import (
 	"net/http"
 	"log"
-	"github.com/gorilla/mux"
-	"github.com/patrickmn/go-cache"
-	"time"		
+	"time"
 	"encoding/json"
 	"strings"
+	"github.com/gorilla/mux"
+	"github.com/patrickmn/go-cache"
 )
 
 const OpenExLatestEndpoint = "https://openexchangerates.org/api/latest.json"
 const CacheExpiration = 60 //minutes
 
+// Structure used to map the response
+// from OpenExchange
 type OpenExchangeLatest struct {
 	Disclaimer string
 	License string
@@ -27,70 +29,76 @@ type FXService struct {
 	CacheService *cache.Cache
 }
 
+// Initialize the FXService by instantiating the Router and CacheService components,
+// registering the API route and setting the OpenExchangeRates AppID
 func (service *FXService) Init(openExchangeAppID string) {
 	service.Router = mux.NewRouter()
-	service.Router.HandleFunc("/current_rates", service.GetCurrentRates).Methods("GET")
 	service.CacheService = cache.New(CacheExpiration * time.Minute, 1 * time.Minute)
 	service.AppID = openExchangeAppID
+
+	service.Router.HandleFunc("/current_rates", service.GetCurrentRates).Methods("GET")
 }
 
+// Start the HTTP Service
 func (service *FXService) Run(port string) {
 	log.Fatal(http.ListenAndServe(port, service.Router))
 }
 
+// /current_rates API endpoint handler
 func (service *FXService) GetCurrentRates(w http.ResponseWriter, r *http.Request) {
-	currency, ok := r.URL.Query()["currency"]
-	rates, err := service.FetchRates()
-	
+	params, ok := r.URL.Query()["currency"]
+	var currency string
+
+	if !ok || len(params) < 1 {
+		currency = ""
+	} else {
+		currency = params[0]
+	}
+
+	rates, err := service.FetchRates(strings.ToUpper(currency))
+
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
 
-	if !ok || len(currency) < 1 {		
-		ratesJson, err := json.MarshalIndent(rates, "", "    ")
-		
-		if err != nil {
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		}
+	var response []byte
+	response, err = json.MarshalIndent(rates, "", "    ")
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write(ratesJson)
-	} else {					
-		currency := strings.ToUpper(currency[0])
-		value := rates[currency]
-		if value == 0 {
-			http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)			
-			return
-		}		
-
-		var rate = make(map[string]float32)
-		rate[currency] = value
-		rateJson, err := json.MarshalIndent(rate, "", "    ")
-		
-		if (err != nil) {			
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-			return
-		}		
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write(rateJson)
-	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(response)
 }
 
-func (service *FXService) FetchRates() (map[string]float32, error) {
+func (service *FXService) FetchRates(currency string) (map[string]float32, error) {
 	//Check for rates in cache
-	rates, found := service.CacheService.Get("rates")	
-	if found {
-		log.Println("Rates retrieved from cache")
-		return rates.(map[string]float32), nil
-	}
-	
-	//Fetch new rates if there's nothing cached
-	log.Println("Fetching new rates")	
+	rates, found := service.CacheService.Get("rates")
 
+	//Fetch new rates if there's nothing cached
+	var err error
+	if !found {
+		log.Println("Fetching new rates")
+		rates, err = service.getNewRates()
+		if err != nil {
+			return nil, err
+		}
+
+		//Cache new rates
+		log.Println("Caching new rates")
+		service.CacheService.Set("rates", rates, cache.DefaultExpiration)
+	}
+		
+	//Handle currency filter
+	if currency != "" {
+		var mappedRates = rates.(map[string]float32)
+		rate := mappedRates[currency]
+		return map[string]float32{currency: rate}, nil
+	}
+	return rates.(map[string]float32), nil
+}
+
+// Retrieve the latest fx rates from openexchange.org
+func (service *FXService) getNewRates() (map[string]float32, error) {
 	var client = &http.Client{Timeout: 10 * time.Second}
 	res, err := client.Get(OpenExLatestEndpoint + "?app_id=" + service.AppID)
 	if err != nil {
@@ -105,10 +113,5 @@ func (service *FXService) FetchRates() (map[string]float32, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	//Cache new rates
-	service.CacheService.Set("rates", dataDecoded.Rates, cache.DefaultExpiration)
-	log.Println("Cached new rates")
-
 	return dataDecoded.Rates, nil
 }
