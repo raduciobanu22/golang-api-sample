@@ -10,7 +10,6 @@ import (
 	"github.com/patrickmn/go-cache"
 )
 
-const OpenExLatestEndpoint = "https://openexchangerates.org/api/latest.json"
 const CacheExpiration = 60 //minutes
 
 // Structure used to map the response
@@ -18,7 +17,7 @@ const CacheExpiration = 60 //minutes
 type OpenExchangeLatest struct {
 	Disclaimer string
 	License string
-	Timestamp int64		
+	Timestamp int64
 	Base string
 	Rates map[string]float32
 }
@@ -26,15 +25,17 @@ type OpenExchangeLatest struct {
 type FXService struct {
 	Router *mux.Router
 	AppID string
+	OpenExchangeUrl string
 	CacheService *cache.Cache
 }
 
 // Initialize the FXService by instantiating the Router and CacheService components,
 // registering the API route and setting the OpenExchangeRates AppID
-func (service *FXService) Init(openExchangeAppID string) {
+func (service *FXService) Init(openExchangeAppID string, openExchangeUrl string) {
 	service.Router = mux.NewRouter()
 	service.CacheService = cache.New(CacheExpiration * time.Minute, 1 * time.Minute)
 	service.AppID = openExchangeAppID
+	service.OpenExchangeUrl = openExchangeUrl
 
 	service.Router.HandleFunc("/current_rates", service.GetCurrentRates).Methods("GET")
 }
@@ -79,16 +80,19 @@ func (service *FXService) FetchRates(currency string) (map[string]float32, error
 	var err error
 	if !found {
 		log.Println("Fetching new rates")
-		rates, err = service.getNewRates()
-		if err != nil {
-			return nil, err
+		rates, err = service.GetNewRates()
+
+		if err != nil || len(rates.(map[string]float32)) == 0 {
+			return map[string]float32{}, err
 		}
 
 		//Cache new rates
 		log.Println("Caching new rates")
 		service.CacheService.Set("rates", rates, cache.DefaultExpiration)
+	} else {
+		log.Println("Retrieving rates from cache")
 	}
-		
+
 	//Handle currency filter
 	if currency != "" {
 		var mappedRates = rates.(map[string]float32)
@@ -99,20 +103,22 @@ func (service *FXService) FetchRates(currency string) (map[string]float32, error
 }
 
 // Retrieve the latest fx rates from openexchange.org
-func (service *FXService) getNewRates() (map[string]float32, error) {
+func (service *FXService) GetNewRates() (map[string]float32, error) {
 	var client = &http.Client{Timeout: 10 * time.Second}
-	res, err := client.Get(OpenExLatestEndpoint + "?app_id=" + service.AppID)
-	if err != nil {
+	res, err := client.Get(service.OpenExchangeUrl + "?app_id=" + service.AppID)
+	if err != nil || res.StatusCode != 200 {
 		return nil, err
 	}
+
 	defer res.Body.Close()
 
 	var dataDecoded OpenExchangeLatest
-	decoder := json.NewDecoder(res.Body)	
+	decoder := json.NewDecoder(res.Body)
 	err = decoder.Decode(&dataDecoded)
-	 
+
 	if err != nil {
 		return nil, err
 	}
+
 	return dataDecoded.Rates, nil
 }
